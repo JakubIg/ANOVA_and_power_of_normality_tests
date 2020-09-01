@@ -1,0 +1,487 @@
+---
+title: "Moce testow + ANOVA"
+author: "Jakub Ignatik"
+date: "15 listopada 2018"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Rozdzia³ I: Moc testów normalnoœci
+###Wprowadzenie
+*Zaleca siê odtwarzanie pliku w formacie HTML*
+  
+Celem tej czêœci projektu jest sprawdzenie mocy testów normalnoœci dla danych z trzech rozk³adów: t-Studenta, jednostajnego, i wyk³adniczego. Wykorzystam do tego piêæ testów: test Shapiro-Wilka, Jarque-Bera, Ko³mogorowa, chi-kwadrat i Andersona Darlinga. Projekt bêdzie opieraæ siê na napisaniu funkcji obliczaj¹cej moce testów dla rozk³adów o zadanej d³ugoœci, a nastêpnie zwizualizowaniu powy¿szego. Ka¿dy z testów opiera siê na innej w³asnoœci rozk³¹du normalnego, wiêc ciekawie bêdzie wygl¹da³o ich starcie z podanymi wy¿ej rozk³adami.     
+**Hipotezy:** Z pewnoœci¹ wraz ze zwiêkszaniem siê próby moc testu bêdzie wzrastaæ. Co do rozk³adów, z których bêd¹ brane dane, spodziewam siê najs³abszej mocy przy testach dla rozk³adu t-Studenta, gdy¿ spoœród wszystkich trzech przypomina on najbardziej rozk³ad normalny. Najwiêksz¹ z kolei moc osi¹gnie zapewne rozk³ad wyk³adniczy. Jeœli chodzi o testy, które wykazywaæ siê bêd¹ najwiêksz¹ moc¹, nie mam zdecydowanych faworytów, domyœlam siê jednak, ¿e we wszystkich przypadkach bardzo dobrze wypadnie test Ko³mogorowa, którego moc znana mi jest z wczeœniejszych projektów.    
+Dane: Rozwa¿am dane o d³ugoœci 5, 10, 25 oraz 50. Poziom istotnoœci ustawi³em na 0,05, a liczbê symulacji na 1000.
+
+###Wizualizacja
+
+Na pocz¹tku za³adujê biblioteki, wprowadzê podane we wprowadzeniu wartoœci oraz stworzê ramkê danych, w której na obecn¹ chwilê znajd¹ siê tylko d³ugoœci prób.
+```{r, warning=FALSE, message=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(tseries)
+library(nortest)
+library(reshape2)
+library(stringr)
+library(car)
+
+set.seed(111)
+#iloœæ symulacji
+N <- 1000
+#poziom istotnoœci
+alpha <- .05
+#d³ugoœci próby
+sample_l <- c(5,10,25,50)
+
+params <- expand.grid(sample_l)
+names(params) <- "length"
+```
+
+Nastêpny krok to wprowadzenie funkcji, która za argumenty bierze d³ugoœæ próby, rozk³ad dla danych oraz test normalnoœci rozk³adu.
+```{r}
+moc_testu <- function(length, distribution, normtest){
+  #Przypisanie nazwy u¿ytego rozk³adu do zmiennej s³u¿¹cej do generowania obserwacji
+  eval(parse(text = paste0("used_distribution <- r", distribution)))
+  #Przypisanie nazwy u¿ytego testu do zmiennej s³u¿¹cej do testowania normalnoœci
+  eval(parse(text = paste0("used_normtest <- ", normtest, ".test")))
+  
+  #Jeœli u¿yty zostanie test Andersona-Darlinga, wektor d³ugoœci jest wyd³u¿any, aby spe³niæ wymóg dotycz¹cy minimalnej liczby obserwacji 
+  if (normtest == "ad"){
+    params$length = params$length + 3
+  }
+  
+  #Obliczanie mocy testów
+  powers <- sapply(1:nrow(params), function(p){
+    length <- params[p, 1]
+    p_sim <-sapply(rep(length, N), function(x){
+      if (distribution == "t"){
+        my_sample <- used_distribution(length, 2)
+      }
+      else{
+        my_sample <- used_distribution(length)
+      }
+      if (normtest == "ks"){
+        used_normtest(my_sample, pnorm)$p.value
+      }
+      else{
+        used_normtest(my_sample)$p.value
+      }
+    })
+    mean(p_sim < alpha)
+  })
+  
+}
+```
+
+Wyniki funkcji dla ka¿dej kombinacji rozk³adu i testu umieszczam w ramce danych, któr¹ to nastêpnie transformujê do postaci w¹skiej.
+```{r}
+power <- bind_cols(params, t_shapiro = moc_testu(length, "t", "shapiro"), 
+                   unif_shapiro = moc_testu(length, "unif", "shapiro"),
+                   exp_shapiro = moc_testu(length, "exp", "shapiro"),
+                   t_jb = moc_testu(length, "t", "jarque.bera"),
+                   unif_jb = moc_testu(length, "unif", "jarque.bera"),
+                   exp_jb = moc_testu(length, "exp", "jarque.bera"),
+                   t_ks = moc_testu(length, "t", "ks"),
+                   unif_ks = moc_testu(length, "unif", "ks"),
+                   exp_ks = moc_testu(length, "exp", "ks"),
+                   t_chi = moc_testu(length, "t", "pearson"),
+                   unif_chi = moc_testu(length, "unif", "pearson"),
+                   exp_chi = moc_testu(length, "exp", "pearson"),
+                   t_ad = moc_testu(length, "t", "ad"),
+                   unif_ad = moc_testu(length, "unif", "ad"),
+                   exp_ad = moc_testu(length, "exp", "ad"))
+
+power2 <- melt(power, "length")
+```
+
+Stworzê teraz wykres, który przedstawi moce testów w rozdzieleniu na ka¿dy z rozk³adów. Najpierw jednak w ramce danych utworzê dwie kolumny, a w ka¿dej z nich znajdzie siê nazwa u¿ytego testu i rozk³adu dla ka¿dego z wierszy, w celu polepszenia czytelnoœci wykresu.  
+```{r, out.width="1000px"}
+power2[,4:5] <- ""
+colnames(power2) <- c("Length","Variable","Value","Rozklad","Test")
+power2[str_detect(power2[,2], "t_") == TRUE,4] <- "t-Student"
+power2[str_detect(power2[,2], "exp_") == TRUE,4] <- "Exp"
+power2[str_detect(power2[,2], "unif_") == TRUE,4] <- "Unif"
+
+power2[str_detect(power2[,2], "shapiro") == TRUE,5] <- "Shapiro"
+power2[str_detect(power2[,2], "jb") == TRUE,5] <- "Jarque-Bera"
+power2[str_detect(power2[,2], "ks") == TRUE,5] <- "Ko³mogorowa"
+power2[str_detect(power2[,2], "chi") == TRUE,5] <- "Chi^2"
+power2[str_detect(power2[,2], "ad") == TRUE,5] <- "Andersona-Darlinga"
+
+power2 %>% ggplot(aes(x = Length, y = Value, color = Test)) + geom_line() + 
+  ggtitle("Moce testów normalnoœci dla wybranych rozk³adów") + 
+  facet_wrap(~Rozklad)
+```
+
+Na powy¿szym wykresie mo¿na na pierwszy rzut mo¿na zaobserwowaæ dwa zjawiska:  
+-Moc wszystkich testów roœnie wraz ze zwiêkszeniem siê d³ugoœci próby (potwierdza to moj¹ hipotezê ze wstêpu). Uwagê z pewnoœci¹ przykuwa test Ko³mogorowa, który w pierwszym i ostatnim przypadku charakteryzuje siê niemal pionowym wzrostem mocy, ale w przypadku rozk³adu t-Studenta przyrost mocy jest niewielki. Zarówno dla rozk³adu wyk³adniczego jak i t-Studenta podobnie wygl¹da przyrost mocy testów, jednak to w pierwszym przypadku zostaje szybciej osi¹gniêta moc zbli¿ona do jednoœci, gdy¿ to dla rozk³adu wyk³adniczego moce testów maj¹ pocz¹tkowo wy¿sze wartoœci. Moce dla ostatniego z rozk³adóW odstaj¹ od reszty, osi¹gaj¹c wysok¹ moc znacznie póŸniej w porównaniu do swoich poprzedników.     
+-Testy osi¹gaj¹ najwiêksz¹ moc przy rozk³adzie wyk³adniczym (zgodnie z moj¹ prognoz¹), jednak najni¿sza moc testu jest osi¹gana nie dla rozk³adu t-Studenta, a dla rozk³adu jednostajnego. 
+  
+W kolejnej czêœci wizualizacji zajmê siê omówieniem z osobna ka¿dego z rozk³adów.  
+```{r}
+#Przekszta³cenie d³ugoœci na typ "factor", aby nadaæ kolejnoœæ s³upkom na wykresie
+ord <- c("5","10","25","50")
+power2$Length <- factor(power2$Length, ord)
+
+power2 %>% filter(Rozklad == "t-Student") %>% 
+  ggplot(aes(x = Test, y = Value, fill = Length)) +
+  geom_bar(stat = "identity", position = position_dodge(0.8), width = 0.7) +
+  ggtitle("Moce testu dla rozk³adu t-Studenta")
+```
+
+Jak wynika z wykresu, najwiêksz¹ moc wobec danych z rozk³adu t-Studenta wykazuj¹ testy Andersona-Darlinga oraz Shapiro-Wilka (nale¿y braæ poprawkê na to, ¿e test Andersona-Darlinga jest wykonywany w rzeczywistoœci dla prób o d³ugoœci Length+3). Test Andersona-Darlinga wykaza³ tak du¿¹ moc, gdy¿ porównuj¹c ogony (na czym to opiera siê test) rozk³adu normalnego i t-Studenta z dwoma stopniami swobody (taki rozk³ad zosta³ wziêty do testu) mo¿na zauwa¿yæ niema³e ró¿nice.  
+Najs³abiej wypad³ test Ko³mogorowa, gdy¿ opiera siê on na ró¿nicach œrednich, które to s¹ zbli¿one dla rozk³adu normalnego i t-Studenta.  
+Ciekawie prezentuje siê test Jarque-Bera, który nie wykazywa³ siê wysok¹ moc¹ przy ma³ych próbach (odpowiednio 0 i 0,17 dla 5 i 10 obserwacji), ale ju¿ przy liczbie obserwacji równej 25 dorówna³ najmocniejszym testom - Andersona-Darlinga i Shapiro-Wilka.  
+```{r}
+power2 %>% filter(Rozklad == "Exp") %>% ggplot(aes(x = Test, y = Value, fill = Length)) +
+  geom_bar(stat = "identity", position = position_dodge(0.8), width = 0.7) +
+  ggtitle("Moce testu dla rozk³adu Exp")
+```
+
+Mo¿na zauwa¿yæ, ¿e testy dla rozk³adu wyk³adniczego wykazuj¹ siê znacznie wiêksz¹ moc¹ ni¿ testy dla rozk³adu t-Studenta (co by³o tak¿e widoczne na pierwszym, ogólnym wykresie). Tym razem jest jeden zdecydowany faworyt, a jest to test Ko³mogorowa. Œrednia jest zatem tym, co zdecydowanie odró¿nia oba rozk³ady i to ju¿ przy niewielkiej próbie - 5 obserwacji pozwala na uzyskanie mocy równej 0,5, a zwiêkszenie tej liczby do 10 skutkuje uzyskaniem maksymalnej mocy.  
+Moce pozosta³ych testóW nie ró¿ni¹ siê zbytnio miêdzy sob¹, jednak wyraŸnie odstaje test Jarque-Bera, który osi¹gn¹³ bardzo zbli¿one wyniki do testu dla rozk³adu t-Studenta. Ponownie zaczyna od zerowej mocy, aby mocno przyœpieszyæ przy liczbie obserwacji równej 25. Tym razem jednak okaza³o siê to niewystarczaj¹ce, aby znaleŸæ siê w czo³ówce (chocia¿ przy liczbie obserwacji równej 50 niewiele brakuje do mocy równej 1, która to zosta³a osi¹gniêta przez inne testy).
+```{r}
+power2 %>% filter(Rozklad == "Unif") %>% ggplot(aes(x = Test, y = Value, fill = Length)) +
+  geom_bar(stat = "identity", position = position_dodge(0.8), width = 0.7) +
+  ggtitle("Moce testu dla rozk³adu Unif")
+```
+
+Rozk³ad jednostajny charakteryzuje siê najmniejsz¹ moc¹ testów spoœród wszystkich trzech rozk³adów. Przy liczbie obserwacji równej 50 wiêkszoœæ testów mia³a moc równ¹ 1, a tymczasem przy rozk³adzie jednostajnym taka sytuacja wystêpuje jedynie przy teœcie Ko³mogorowa, który to ponownie okaza³ siê najlepszy i to z jeszcze wiêkszym zapasem wobec innych testów.  
+Stawkê zamyka ponownie test Jarque-Bera, chocia¿ tym razem ró¿nica jest znacznie bardziej widoczna, gdy¿ na wykresie mo¿emy dostrzec tylko jeden, bliski zeru s³upek dla d³ugoœci równej 10. Rozk³ad jednostajny okaza³ siê dla testu tak podobny do rozk³adu normalnego, ¿e moc testu oscyluje wokó³ zera. Oba rozk³ady musz¹ posiadaæ bardzo podobn¹ skoœnoœæ i kurtozê.  
+
+###Podsumowanie
+
+Wyniki czêœciowo potwierdzi³y moje hipotezy:  
+**D³ugoœæ próby: **We wszystkich przypadkach, dla ka¿dego rozk³adu i ka¿dego testu, zwiêkszenie liczby obserwacji wp³ynê³o na zwiêkszenie mocy testu. Oznacza to, ¿e zwiêkszenie d³ugoœci próby skutkuje wzrostem mocy testu. Najbardziej jest to widoczne dla testu Jarque-Bera, gdzie dla ma³ych prób test ma bardzo nisk¹ moc, a dla wysokich o wiele wiêksz¹ w doœæ krótkim czasie.  
+**Rozk³ady: **Zgodnie z hipotez¹, najwiêksz¹ moc¹ charakteryzuj¹ siê testy dla rozk³adu wyk³adniczego, zatem rozk³ad wyk³adniczy jest tym, który najbardziej ze wszystkich ró¿ni siê od rozk³adu normalnego i naj³atwiej wykryæ ró¿nice. Zaskoczy³y mnie wyniki testów dla rozk³adu t-Studenta, gdy¿ spodziewa³em siê dla niego najmniejszej mocy. Okaza³o siê jednak, ¿e ró¿nice nie s¹ tak trudne do wykrycia jak przy rozk³adzie jednostajnym.  
+**Testy normalnoœci: **  
+-Test Ko³mogorowa okaza³ siê rzeczywiœcie mocny, jednak nie we wszystkich przypadkach: przy rozk³adzie t-Studenta okaza³ siê tym, który wypad³ najs³abiej  
+-Testy Shapiro-Wilka i Andersona-Darlinga okaza³y siê byæ mocnymi testami, które mia³y zbli¿on¹ do siebie moc. Oba jednak wypad³y gorzej w starciu z rozk³adem jednostajnym.  -Test Chi^2 nie zosta³ wspomniany przeze mnie ani razu podczas analizowania wykresów, gdy¿ nie by³ ani razu na wysokiej pozycji, ale nie zamyka³ te¿ stawki na ostatnim miejscu. Nie jest to mocny test, jest raczej s³abym testem, zw³aszcza przy ma³ych iloœciach obserwacji  
+-Test Jarque-Bera wypad³ w tym zestawieniu najgorzej. Dla wszystkich rozk³adóW wypada³ s³abo przy ma³ych próbach i przyœpiesza³ przy wiêkszej iloœci obserwacji, doganiaj¹c resztê testów, jednak przy rozk³adzie jednostajnym nie wykaza³ ¿adnej mocy, jaka to sytuacja nie wyst¹pi³a dla ¿adnego innego testu  
+
+#Rozdzia³ II: ANOVA
+###Wprowadzenie
+
+Celem drugiej czêœci projektu jest wykonanie badania ANOV¥. W projekcie wykorzystam ANOVÊ jedno oraz dwuczynnikow¹, a tak¿e MANOVÊ.  
+**Dane: **Dane opieraj¹ siê na dwóch Ÿród³ach:  
+-*IMDB:* Baza danych z tej strony zosta³a przeze mnie pobrana ze strony Kaggle (https://www.kaggle.com/PromptCloudHQ/imdb-data/version/1). Obejmuje ona 1000 najpopularniejszych filmów na portalu IMDB w latach 2008-2016  
+-*Filmweb:* Przygotowa³em w³asnorêcznie trzy ramki danych dotycz¹ce aktorów, aktorek i re¿yserów. Za pomoc¹ webscrappingu pobra³em z Filmwebu rankingi wy¿ej wymienionych osób. Ka¿d¹ ramkê po kolei ³¹czy³em z baz¹ IMDB na podstawie klucza w postaci imienia i nazwiska aktora/aktorki/re¿ysera. Po dokonanych operacjach w bazie zosta³y 83 kompletne rekordy. Ostatnim krokiem by³o w³asnorêczne dopisywanie do ka¿dego z filmów zmiennej 0-1 oznaczaj¹cej zdobycie przez filmu Oscara.  
+**Metodologia: **Na potrzeby projektu zdecydowa³em siê na pozostawienie jednej zmiennej zale¿nej (Ocena) oraz trzech czynników grupuj¹cych: gatunku filmu, jego d³ugoœci oraz tego, czy dany film zdoby³ Oscara. Uzna³em za interesuj¹ce sprawdzenie, czy te w³aœnie parametry maj¹ wp³yw na ocenê filmu. W tym celu przeprowadzê nastêpuj¹ce badania:  
+-ANOVA jednoczynnikowa (Ocena ~ Gatunek, Ocena ~ Dlugosc, Ocena ~ Oscary)  
+-ANOVA wieloczynnikowa (Ocena ~ Dlugosc + Oscary)  
+-MANOVA (Ocena + Dlugosc ~ Oscary)  
+**Hipotezy: **Jeœli chodzi o ANOVÊ jednoczynnikow¹, spodziewam siê, ¿e tylko liczba zdobytych Oscarów bêdzie mia³a wp³yw na ocenê filmu. Zdobycie Oscara oznacza, ¿e dany film by³ szczególnie doceniony przez jury, a wiêc móg³ podobaæ siê tak¿e szerszej publicznoœci. Nie s¹dzê, ¿eby d³ugoœæ filmu oraz jego gatunek mia³y taki wp³yw. Udany film nie musi byæ d³ugi, a gatunek nie gra roli, gdy chodzi o ocenê tego, czy film jest dobry.  
+Co do ANOVY dwuczynnikowej, myœlê, ¿e wyka¿e ona wp³yw jedynie Oscarów, a model bêdzie pozbawiony interakcji pomiêdzy zmiennymi kategorycznymi.  
+Myœlê, ¿e MANOVA wyka¿e wp³yw Oscarów na oba te czynniki jednoczeœnie, gdy¿ liczba Oscarów wp³ywa wg mnie zarówno na ocenê filmu jak i jego d³ugoœæ (najd³u¿sze filmy czêsto maj¹ Oscara).  
+
+##Badanie ANOV¥
+###Zasady randomizacji i niezale¿noœæ danych
+Wszystkie z modeli opisanych we wstêpie spe³niaj¹ obie zasady randomizacji: próbka zosta³a wybrana z populacji w sposób losowy(baza zawiera³a 1000 najlepszych filmów, jednak losowo wybra³em filmy do badania poprzez wykorzystanie bazy aktorów serwisu Filmweb), a elementy zosta³y przypisane do próbek równie¿ w sposób losowy, nie dzieli³em ich wzglêdem podobieñstwa pozosta³ych parametrów.  
+Zmienna zale¿na Ocena oraz D³ugoœæ posiadaj¹ wartoœci na skali przedzia³owej (Ocena - od 1 do 10, D³ugoœæ - od 89 do 191 minut).  
+Jeœli chodzi o niezale¿noœæ danych, najlepiej przedstawi to macierz korelacji. Zanim jednak j¹ przedstawiê, wgram dane potrzebne do projektu:
+```{r, out.width="800px"}
+dane <- read.csv("C:/Users/Jan/Desktop/filmy2.csv", sep = ";", dec = ".")
+#Wiêkszoœæ filmów ma przypisane kilka gatunków filmowych, ja wybiorê tylko ten, który jest na pierwszym miejscu
+dane$Gatunek <- gsub(",.*", "", dane$Gatunek)
+
+#Do macierzy korelacji biorê tylko dane liczbowe
+dane2 <- dane[,c(5:11)]
+
+COR <- cor(dane2[,1:7])
+image(x=seq(nrow(COR)), y=seq(ncol(COR)), z=cor(dane2[,1:7]), axes=F, xlab="", ylab="")
+text(expand.grid(x=seq(dim(COR)[1]), y=seq(dim(COR)[2])), labels=round(c(COR),2))
+box()
+axis(1, at=seq(nrow(COR)), labels = rownames(COR), las=2)
+axis(2, at=seq(ncol(COR)), labels = colnames(COR), las=1)
+```
+
+Jak wynika z macierzy korelacji, dane nie s¹ ze sob¹ mocno skorelowane, korelacja jest doœæ s³aba.  
+
+###ANOVA jednoczynnikowa
+
+Pierwszy model jaki wykonam to *Ocena ~ Gatunek*. Zbada on, czy œrednie ocen ró¿ni¹ siê w zale¿noœci od gatunku filmu. Na pocz¹tku zamieniê zmienn¹ Gatunek na zmienn¹ kategoryczn¹ oraz zbadam ró¿norodnoœæ grup.
+```{r, out.width="1000px"}
+dane$Gatunek <- as.factor(dane$Gatunek)
+
+#Funkcja pozwoli na pokazanie na wykresie outlierów, gdy¿ nie bêd¹ one widoczne wœród innych obserwacji
+is_outlier <- function(x) {
+  return(x < quantile(x, 0.25) - 1.5 * IQR(x) | x > quantile(x, 0.75) + 1.5 * IQR(x))
+}
+dane %>% group_by(Gatunek) %>% mutate(outlier = ifelse(is_outlier(Ocena), Ocena, as.numeric(NA))) %>%
+  ggplot(aes(x = Gatunek, y = Ocena, color = Gatunek)) + geom_boxplot() + 
+  ggtitle("Wykresy pude³kowe ocen wg gatunku filmu") + geom_jitter() +
+  geom_text(aes(label = outlier), na.rm = TRUE, hjust = -1) +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+```
+Z wykresu mo¿na pokusiæ siê o wysnucie wniosku, ¿e gatunek ma wp³yw na ocenê filmu. Trzeba jednak mieæ na uwadze, ¿e wszystkie gaunki filmowe poza komedi¹ mieszcz¹ siê w zakresie ocen 7-8, wiêc nie jest to drastyczna ró¿nica. Wykres zwraca e¿ uwagê na to, ¿e iloœæ ocen dla poszczególnych gatunków doœæ mocno siê od siebie ró¿ni - od oko³o 30 dla filmów akcji po 4 dla komedii. Na pewno wiêc nie bêd¹ stosowane testy wariancji zak³adaj¹ce równoœæ podgrup.  
+
+Aby zosta³o spe³nione za³o¿enie ANOVY o normalnoœci zmiennej zale¿nej w podgrupach, przeprowadzê test Shapiro-Wilka.
+```{r}
+tapply(dane$Ocena, dane$Gatunek, shapiro.test)
+```
+
+Jak widaæ, ¿aden z gatunków nie ma problemu z normalnoœci¹ rozk³adu zmiennej zale¿nej. Ostatnie za³o¿enie do zbadania dotyczy równoœci wariancji. poniewa¿ liczebnoœci grup mocno siê od siebie ró¿ni¹, przeprowadzê test Bartletta.
+```{r}
+bartlett.test(Ocena ~ Gatunek, data = dane)
+```
+
+Równie¿ i to za³o¿enie zosta³o spe³nione. Mo¿na zatem przejœæ do badania ANOV¥.
+```{r}
+summary(aov(Ocena ~ Gatunek, data = dane))
+```
+Jak wynika z badania, pomimo tego, co widoczne by³o na wykresie, gatunek filmu nie ma wp³ywu na jego ocenê, co potwierdza moj¹ hipotezê.  
+  
+Kolejnym modelem bêdzie *Ocena ~ Oscary*. Podobnie jak w poprzednim przypadku, zamieniê zmienn¹ Oscary na typ factor oraz zbadam podstawowe statystyki.
+```{r}
+dane$Oscary <- as.factor(dane$Oscary)
+
+dane %>% group_by(Oscary) %>% mutate(outlier = ifelse(is_outlier(Ocena), Ocena, as.numeric(NA))) %>%
+  ggplot(aes(x = Oscary, y = Ocena, color = Oscary)) + geom_boxplot() + 
+  ggtitle("Wykresy pude³kowe ocen wg zdobytych Oscarów") +
+  scale_color_manual(labels = c("0", ">= 1"), values = c("blue", "red")) +
+  guides(color=guide_legend("Oscary")) + geom_jitter() +
+  geom_text(aes(label = outlier), na.rm = TRUE, hjust = -1) +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+```
+  
+Równie¿ i w tym przypadku wykres wskazuje na ró¿nice w ocenach filmów dla filmów oscarowych (mniej licznych, oko³o 20) oraz tych, które Oscara nie dosta³y (oko³o 60). Patrz¹c na wykres mo¿na wysnuæ wniosek, ¿e filmy z Oscarami s¹ lepiej oceniane przez widzów. Te¿ i tym razem potrzebny bêdzie test Bartletta.  
+Aby zosta³o spe³nione za³o¿enie ANOVY o normalnoœci zmiennej zale¿nej w podgrupach, przeprowadzê test Shapiro-Wilka.
+```{r}
+tapply(dane$Ocena, dane$Oscary, shapiro.test)
+```
+
+Jak widaæ, ¿aden z gatunków nie ma problemu z normalnoœci¹ rozk³adu zmiennej zale¿nej. Ostatnie za³o¿enie do zbadania dotyczy równoœci wariancji. poniewa¿ liczebnoœci grup mocno siê od siebie ró¿ni¹, przeprowadzê test Bartletta.
+```{r}
+bartlett.test(Ocena ~ Oscary, data = dane)
+```
+
+Równie¿ i w tym przypadku za³o¿enie zosta³o spe³nione. Mo¿na przejœæ zatem do badania ANOV¥.
+```{r}
+summary(aov(Ocena ~ Oscary, data = dane))
+```
+
+Tym razem wynik ró¿ni siê od poprzedniego. Okazuje siê, ¿e œrednie ocen dla tych filmów, które maj¹ Oscara oraz dla tych, które go nie maj¹, ró¿ni¹ siê miêdzy sob¹, co tym razem znajduje odzwierciedlenie na wykresie. Ponownie zgadza siê to z moj¹ hipotez¹, ale pozostaje pytanie, na ile mocny jest ten efekt.  
+Analiza post-hoc by³aby tutaj zbêdna, gdy¿ zmienna kategoryczna ma tylko 2 poziomy i z góry wiadomo, które czynniki odpowiadaj¹ za ró¿ne œrednie dla grup. Aby sprawdziæ moc tego efektu, przeprowadzê badanie wielkoœci efektów eksperymentalnych. Najpierw sporz¹dzê funkcje, które to policz¹, a nastêpnie obliczê wielkoœæ tych efektów.  
+```{r}
+eta_sq <- function(aovm){
+  sum_stats <- summary(aovm)[[1]]
+  SSm <- sum_stats[["Sum Sq"]][1]
+  SSr <- sum_stats[["Sum Sq"]][2]
+  SSm/(SSm+SSr)
+}
+
+omega_sq <- function(aovm){
+  sum_stats <- summary(aovm)[[1]]
+  SSm <- sum_stats[["Sum Sq"]][1]
+  SSr <- sum_stats[["Sum Sq"]][2]
+  DFm <- sum_stats[["Df"]][1]
+  MSr <- sum_stats[["Mean Sq"]][2]
+  (SSm-DFm*MSr)/(SSm+SSr+MSr)
+}
+
+eta_sq(aov(Ocena ~ Oscary, data = dane))
+omega_sq(aov(Ocena ~ Oscary, data = dane))
+```
+
+Pierwsza wielkoœæ, eta^2 informuje o tym, jaki % zmiennoœci oceny jest wyjaœniany przez to, czy film zdoby³ Oscara. W powy¿szym wypadku jest to 19%, wiêc efekt jest s³aby.  
+Druga wielkoœæ, omega^2 pokazuje to samo, lecz odnosi siê nie do próby, a do ca³ej populacji. W tym wypadku 18% zmiennoœci oceny jest wyjaœniany przez oscarowoœæ filmu dla wszystkich filmów, nie tylko tych w próbie. Efek jest równie¿ i w tym przypadku s³aby.  
+  
+Kolejnym modelem bêdzie *Ocena ~ Dlugosc*. D³ugoœæ nie jest jednak zmienn¹ kategoryczn¹, wiêc utworzê now¹ zmienn¹ (V12), która podzieli filmy na 3 zbiory: <= 120 minut, (120, 150> minut oraz >150 minut. Po zainicjalizowaniu nowej zmiennej zamieniê j¹ na typ factor oraz zbadam jej podstawowe statystyki, aby nastêpnie utworzyæ model w³aœciwy, tj. *Ocena ~ V12*.
+```{r}
+dane[,12] <- NULL
+for (i in 1:nrow(dane)){
+  if (dane$Dlugosc[i] <= 120){
+    dane[i,12] <- 1
+  }
+  else if (dane$Dlugosc[i] <= 150){
+    dane[i,12] <- 2
+  }
+  else{
+    dane[i,12] <- 3
+  }
+}
+
+dane$V12 <- as.factor(dane$V12)
+
+dane %>% group_by(V12) %>% mutate(outlier = ifelse(is_outlier(Ocena), Ocena, as.numeric(NA))) %>%
+  ggplot(aes(x = V12, y = Ocena, color = V12)) + geom_boxplot() + 
+  ggtitle("Wykresy pude³kowe ocen wg d³ugoœci filmu") +
+  scale_color_manual(labels = c("<= 120", "(120,150>", ">150"), values = c("blue", "red", "green")) +
+  guides(color=guide_legend("D³ugoœæ filmu (min.)")) + geom_jitter() +
+  geom_text(aes(label = outlier), na.rm = TRUE, hjust = -1) +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+```
+
+Jak widaæ na wykresie, najkrótsze filmy oraz te o œredniej d³ugoœci s¹ do siebie bardzo zbli¿one: œrednia jest praktycznie identyczna, chocia¿ filmy z drugiej grupy maj¹ wiêkszy rozrzut ocen. Zdecydowanie odstaje ostatnia z grup, sugeruj¹c, ¿e najd³u¿sze filmy s¹ tymi, które zgarniaj¹ najlepsze oceny. Wielkoœæ grup jest do siebie dosyæ zbli¿ona (26, 40, 17), jeœli porównaæ to z poprzednimi zmiennymi kategorycznymi.  
+Najpierw sprawdzê normalnoœæ zmiennej zale¿nej wzglêdem podgrup.
+```{r}
+tapply(dane$Ocena, dane$V12, shapiro.test)
+```
+
+Zgodnie z powy¿szym testem, ¿adna z podgrup nie ma problemóW z normalnoœci¹ ocen. Czas na zbadanie kolejnego za³o¿enia ANOVY.
+```{r}
+bartlett.test(Ocena ~ V12, data = dane)
+```
+
+Za³o¿enie równoœci wariancji zosta³o spe³nione. Pozosta³ model ANOVY.
+```{r}
+summary(aov(Ocena ~ V12, data = dane))
+```
+
+Moja hipoteza okaza³a siê fa³szywa. Okazuje siê, ¿e wykres ponownie da³ s³uszn¹ sugestiê nierównoœci œredniej w grupach. Ale czy na pewno? Mo¿liwe jest, ¿e s¹ pewne ró¿nice nie tylko wzglêdem trzeciej grupy. W tym celu przeprowadzê test post-hoc, test Tuckeya, który wska¿e mi pary odpowiedzialne za powodzenie badania ANOV¥.
+```{r}
+TukeyHSD(aov(Ocena ~ V12, data = dane))
+```
+
+Ró¿nice wystêpuj¹ dla par 2-1 oraz 3-1, zatem rzeczywiœcie grupa 1 i 2 nie odbiegaj¹ od siebie œrednimi ocen. Jak bêdzie siê przedstawia³ efekt eksperymentalny, skoro nie ma ró¿nic wzglêdem wszystkich podgrup?
+```{r}
+eta_sq(aov(Ocena ~ V12, data = dane))
+omega_sq(aov(Ocena ~ V12, data = dane))
+```
+Pomimo braku udzia³u wszystkich grup w nierównoœci œredniej ocen, d³ugoœæ filmu objaœnia 24% zmiennoœci Oceny w próbie. W populacji wynik jest niewiele gorszy i wynosi 22%. Jednak ponownie jest to efekt s³aby.  
+
+###ANOVA dwuczynnikowa
+
+Model, jakim zajmê siê w tej czêœci projektu, poœwiêconej ANOVIE dwuczynnikowej, to *Ocena ~ V12 + Oscary*. Dlaczego w modelu jest znak (+) zamiast (*), wyjaœni poni¿szy wykres.
+```{r}
+dane %>% ggplot(aes(x = V12, y = Ocena, color = Oscary, group = Oscary)) +
+  stat_summary(fun.y = mean, geom = "point") +
+  stat_summary(fun.y = mean, geom = "line") +
+  scale_color_manual(labels = c("0", ">= 1"), values = c("blue", "red")) +
+  xlab("D³ugoœæ filmu") + scale_x_discrete(labels = c("<= 120", "(120,150>", ">150")) + ggtitle("Wykres interakcji miêdzy d³ugoœci¹ filmu a liczb¹ Oscarów ")
+```
+
+Wykres interakcji to wykres, który pokazuje ³¹czny wp³yw dzia³ania kilku czynników (tzn., czy jeden czynnik wp³ywa na zmienn¹ zale¿n¹ zale¿nie od drugiego czynnika). Mo¿na zauwa¿yæ, ¿e Oscary i V12 to czynniki addytywne, nieposiadaj¹ce efektu interakcji. Dlatego w³aœnie w modelu pojawi³ siê znak (+), który oznacza jej brak.  
+  
+Zanim przejdê do badania, nale¿y zbadaæ normalnoœæ w podgrupach, których jest 6 (3 poziomy d³ugoœci * 2 poziomy Oscarów).
+```{r}
+podgrupy <- split(dane,list(dane$Oscary,dane$V12))
+#w szóstej kolumnie s¹ podane oceny filmów
+for (i in 1:6){
+  print(shapiro.test(podgrupy[[i]][,6]))
+}
+```
+
+Mo¿na zauwa¿yæ, ¿e dla i=4 jest lekki problem z normalnoœci¹ rozk³adu. Oto grupa, która wywo³a³a ten problem:
+```{r}
+podgrupy[[4]]
+```
+
+Jest to podgrupa filmów posiadaj¹cych Oscary, o œredniej d³ugoœci. Danych jest zaledwie 7, wiêc st¹d móg³ pojawiæ siê problem z normalnoœci¹. Poza tym, wartoœæ p-value wykaza³a wartoœæ 0,0365, wiêc dla mniejszego wspó³czynnika ufnoœci problem nie istnieje. Uzna³em zatem, ¿e wszystko jest w porz¹dku. Czas na zbadanie równoœci wariancji w podgrupach. Tym razem wykorzystam test Levene'a, który równie¿ nie potrzebuje za³o¿enia o równolicznoœci grup (test Bartletta nie chcia³ wspó³pracowaæ przy ANOVIE dwuczynnikowej).
+```{r}
+leveneTest(Ocena ~ Oscary*V12, data = dane)
+```
+
+Test potwierdzi³ równoœæ wariancji w podgrupach, wiêc wszystkie za³o¿enia ANOVY s¹ spe³nione. Mo¿na przejœæ do badania.
+```{r}
+summary(aov(Ocena ~ Oscary+V12, data = dane))
+```
+
+Wynik nie powinien byæ zaskoczeniem, gdy¿ ju¿ wczeœniej wykaza³em, ¿e oba te czynniki wp³ywaj¹ na ocenê filmu. Aby zobaczyæ, czy ró¿nice wystêpuj¹ przy tych samych parach, wykonam test Tukeya.
+```{r}
+TukeyHSD(aov(Ocena ~ Oscary+V12, data = dane))
+```
+
+Równie¿ i w tym wypadku nie zasz³y ¿adne radykalne zmiany. Moja dociekliwoœæ zapyta³a mnie jednak, jak wygl¹da³by test Tukeya oraz model ANOVY, jeœli uwzglêdniæ efekt interakcji. Wyniki okaza³y siê interesuj¹ce.
+```{r}
+summary(aov(Ocena ~ Oscary*V12, data = dane))
+```
+
+Wyniki ZARAZ bêd¹ interesuj¹ce, gdy¿ w ANOVIE nie ma nic odkrywczego. Efekt interakcji nie jest tu istotny statystycznie.
+```{r}
+TukeyHSD(aov(Ocena ~ Oscary*V12, data = dane))
+```
+Okazuje siê, ¿e przy efekcie interakcji niektóre zestawienia maj¹ istotnie ró¿ne œrednie - efekt interakcji nie zachodzi jako ca³oœæ, ale dla poszczególnych zestawieñ ju¿ tak:  
+-Brak Oscara:D³ugi film - Brak Oscara:Krótki film   
+-Brak Oscara:D³ugi film - Brak Oscara:Œredni film  
+-Oscar:D³ugi film - Brak Oscara:Krótki film  
+-Oscar:D³ugi film - Brak Oscara:Œredni film  
+Istotn¹ rolê gra w tych interakcjach d³ugi film, wiêc zapewne to on je powoduje.  
+  
+Na koniec sprawdzê moc efektu. W tym celu utworzê zaktualizowane funkcje, które s³u¿¹ do liczenia powy¿szego przy ANOVIE wieloczynnikowej.  
+```{r}
+eta_sq <- function(aovm){
+  sum_stats <- summary(aovm)[[1]]
+  SSm1 <- sum_stats[["Sum Sq"]][1]
+  SSm2 <- sum_stats[["Sum Sq"]][2]
+  SSr <- sum_stats[["Sum Sq"]][3]
+  print("Pierwszy efekt: ")
+  print(SSm1/(SSm1+SSm2+SSr))
+  print("Drugi efekt: ")
+  print(SSm2/(SSm1+SSm2+SSr))
+  print("Suma: ")
+  print(SSm1/(SSm1+SSm2+SSr) + SSm2/(SSm1+SSm2+SSr))
+}
+
+omega_sq <- function(aovm){
+  sum_stats <- summary(aovm)[[1]]
+  SSA <- sum_stats[["Sum Sq"]][1]
+  SSB <- sum_stats[["Sum Sq"]][2]
+  SSr <- sum_stats[["Sum Sq"]][3]
+  DFA <- sum_stats[["Df"]][1]
+  DFB <- sum_stats[["Df"]][2]
+  MSr <- sum_stats[["Mean Sq"]][3]
+  print("Pierwszy efekt: ")
+  print((SSA-DFA*MSr)/(SSA+SSB+SSr+MSr))
+  print("Drugi efekt: ")
+  print((SSB-DFB*MSr)/(SSA+SSB+SSr+MSr))
+  print("Suma: ")
+  print((SSA-DFA*MSr)/(SSA+SSB+SSr+MSr) + (SSB-DFB*MSr)/(SSA+SSB+SSr+MSr))
+}
+
+eta_sq(aov(Ocena ~ Oscary+V12, data = dane))
+omega_sq(aov(Ocena ~ Oscary+V12, data = dane))
+```
+
+Jak widaæ, obie zmienne wyjaœniaj¹ ³¹cznie oko³o 35% zmiennoœci próby losowej, natomiast oko³o 32% zmiennoœci w ca³ej populacji. Jest to jednak wci¹¿ efekt s³aby.
+
+###MANOVA
+
+W ostatniej czêœci badania zmierzê siê wielowymiarow¹ ANOV¥. Osoba czytaj¹ca moj¹ pracê mog³a zauwa¿yæ, ¿e we wstêpie zmienna Dlugosc wystêpowa³a w dwóch rolach: jako zmienna kategoryczna oraz zale¿na. Jak to okaza³o siê ju¿ przy ANOVIE jednoczynnikowej, by³o to lekkie nagiêcie rzeczywistoœci, gdy¿ z DLugosci zosta³a utworzona zmienna kategoryczna, ona sama zaœ w sobie jest zmienn¹ zale¿n¹. W tym punkcie w³aœnie tak j¹ potraktujê: tworz¹c model *Ocena + Dlugosc ~ Oscary*.  
+Na pocz¹tku sprawdzê na wykresie relacjê miêdzy d³ugoœci¹ filmu a liczb¹ zdobytych Oscarów (zale¿noœæ miêdzy ocen¹ a liczb¹ zdobytych Oscarów zbada³em wczeœniej).
+```{r}
+dane %>% ggplot(aes(x = Oscary, y = Dlugosc, col = Oscary)) + geom_boxplot() + 
+  ggtitle("Wykresy pude³kowe d³ugoœci filmu wg Oscarów") + geom_jitter() +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+```
+
+Jak wynika z wykresu, œrednia d³ugoœci nie ró¿ni siê zbytnio miêdzy filmami z Oscarami i bez nich. Dla przypomnienia, w przypadku wykresu Ocena-Oscary wykres wskazywa³ wiêksze ró¿nice.  
+Wykonam teraz test normalnoœci, ale wy³¹cznie wg zmiennej Dlugosc, gdy¿ wg zmiennej Oscary testy zosta³y przeprowadzone przy ANOVIE jednoczynnikowej. 
+```{r}
+tapply(dane$Dlugosc, dane$Oscary, shapiro.test)
+```
+
+Za³o¿enia o normalnoœci zmiennych zale¿nych zosta³y spe³nione, pora wiêc na test równoœci wariancji, ale ponownie wy³¹cznie dla zmiennej Dlugosc.
+```{r}
+bartlett.test(Dlugosc ~ Oscary, data = dane)
+```
+
+Równie¿ ten warunek zosta³ spe³niony, wiêc mo¿na przyst¹piæ do badania MANOV¥.
+```{r}
+summary(manova(cbind(Ocena, Dlugosc) ~ Oscary, data = dane))
+```
+
+Jak widaæ, œrednie ocen i d³ugoœci filmów ró¿ni¹ siê miêdzy filmami, jednak nie jest to do koñca prawdziwe stwierdzenie. Mo¿liwe, ¿e œrednie tylko jednej z tych cech (a konkretnie konkretnie zmiennej Ocena, gdy¿ ANOVA jednoczynnikowa to pokaza³a) ró¿ni¹ siê wzglêdem zdobytych Oscarów.
+```{r}
+summary(aov(cbind(Ocena, Dlugosc) ~ Oscary, data = dane))
+```
+
+Rzeczywiœcie tylko œrednie ocen ró¿ni¹ siê wzglêdem Oscarów, tym samym nie potwierdzi³¹ siê moja hipoteza ze wstêpu o wp³ywie Oscarów na oba czynniki jednoczeœnie.
+
+##Podsumowanie
+Wynki czêœciowo potwierdzi³y moje hipotezy:  
+**ANOVA jednoczynnikowa: **  
+-*Ocena ~ Gatunek*: Potwierdzi³a siê moja hipoteza, ANOVA nie wykaza³a ró¿nic dla œrednich ocen wzglêdem gatunków filmów  
+-*Ocena ~ Oscary*: Tutaj te¿ potwierdzi³a siê moja hipoteza. Oscary wp³ywaj¹ na róŸnice dla œrednich ocen, ale ze s³abym efektem.  
+-*Ocena ~ Dlugosc(V12)*: Zaskoczenie, nie spodziewa³em siê, ¿e œrednie ocen bêd¹ siê ró¿niæ wzglêdem d³ugoœæi filmów. Jak wykaza³ test Tuckeya, wszystko to za spraw¹ filmów powy¿ej 150 minut. Efekt jednak by³ s³aby.  
+**ANOVA wieloczynnikowa: **  
+-*Ocena ~ Oscary + Dlugosc(V12)*: Prawid³owo przewidzia³em, ¿e jedynie Oscary bêd¹ mia³y wp³yw na ocenê, a model bêdzie pozbawiony interakcji. Zaskoczeniem jednak by³a obecnoœæ interakcji dla niekórych tylko zbiorów.  
+**MANOVA: **  
+-*Ocena + Dlugosc ~ Oscary*: Nie s¹dzi³em, ¿e Oscary nie bêd¹ rozró¿niaæ d³ugoœci filmów. Moja hipoeza by³a nietrafna.
